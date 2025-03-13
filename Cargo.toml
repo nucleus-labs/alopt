@@ -2,9 +2,12 @@
 name = "alopt"
 version = "0.1.0"
 edition = "2024"
+authors = ["Maxine Alexander <Max.Alexander3721@gmail.com>"]
+readme = "README.md"
+repository = "https://github.com/nucleus-labs/alopt"
+license = "MIT"
 
 [features]
-# default = ["tokio"]
 tokio = ["dep:tokio"]
 
 [dependencies]
