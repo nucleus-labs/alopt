@@ -2,10 +2,13 @@
 name = "alopt"
 version = "0.1.0"
 edition = "2024"
+description = "a Rust crate providing efficient synchronization primitives that integrate Option into their design."
 authors = ["Maxine Alexander <Max.Alexander3721@gmail.com>"]
 readme = "README.md"
 repository = "https://github.com/nucleus-labs/alopt"
 license = "MIT"
+keywords = ["synchronization", "concurrency", "async", "multithreading", "lock"]
+categories = ["concurrency", "asynchronous", "data-structures"]
 
 [features]
 tokio = ["dep:tokio"]
