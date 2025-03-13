@@ -1,7 +1,7 @@
 use ringbuffer::{AllocRingBuffer, RingBuffer};
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::*};
-use std::sync::{Mutex, Arc};
+use std::sync::atomic::{AtomicBool, Ordering::*};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::alo::notify::Notify;
 
@@ -49,7 +49,7 @@ type AcquireList = Mutex<AllocRingBuffer<Acquire>>;
 /// mixed-type acquisition requests can clog the buffer very quickly.
 pub(super) struct RwSemaphore {
     /// reader count
-    rc: AtomicUsize,
+    rc: Mutex<usize>,
     /// acquire list.
     /// buffers and batches all acquisition requests so writers cannot be starved
     al: AcquireList,
@@ -91,7 +91,7 @@ impl Acquire {
 impl RwSemaphore {
     pub(super) fn new() -> Self {
         Self{
-            rc: AtomicUsize::new(0),
+            rc: Mutex::new(0),
             al: Mutex::new(AllocRingBuffer::new(MAX_ACQUIRES)),
             an: Notify::new().into(),
             sc: AtomicBool::new(false),
@@ -99,26 +99,26 @@ impl RwSemaphore {
         }
     }
 
-    fn poll_inner(&self, rc: usize) -> Option<usize> {
-        if rc > 0 && rc < MAX_READS { // there are active read-guards and not the maximum amount
+    fn poll_inner(&self, rc: &mut MutexGuard<usize>) -> Option<usize> {
+        if **rc > 0 && **rc < MAX_READS { // there are active read-guards and not the maximum amount
             let mut lock = self.al.lock().unwrap();
             let acquire = lock.front_mut().unwrap();
             
-            let permit_count = (MAX_READS - rc).min(acquire.ac);
+            let permit_count = (MAX_READS - **rc).min(acquire.ac);
             acquire.ac -= permit_count;
-            self.rc.fetch_add(permit_count, Release);
+            **rc += permit_count;
 
             for _ in 0..permit_count {
                 acquire.an.notify_one();
             }
-        } else if rc == 0 { // there are no active read-guards
+        } else if **rc == 0 { // there are no active read-guards
             let mut lock = self.al.lock().unwrap();
             if let Some(acquire) = lock.front_mut() { // there is an acquisition buffer entry
                 if acquire.ac > 0 { // the buffer entry has remaining requests
                     acquire.ac -= 1;
                     
                     if acquire.is_read() {
-                        self.rc.fetch_add(1, Release);
+                        **rc += 1;
                         acquire.an.notify_one();
                         // return Some(1);
                     } else {
@@ -136,10 +136,10 @@ impl RwSemaphore {
 
     /// Checks the status of the semaphore and, if it can, grants permission to
     /// additional readers/writers.
-    fn poll(&self, rc: usize) {
-        if let Some(rc_cascade) = self.poll_inner(rc) {
-            // println!("2nd poll");
-            let _ = self.poll_inner(rc_cascade);
+    fn poll(&self) {
+        let mut rc = self.rc.lock().unwrap();
+        if let Some(_) = self.poll_inner(&mut rc) {
+            let _ = self.poll_inner(&mut rc);
         }
     }
 
@@ -158,7 +158,7 @@ impl RwSemaphore {
 
     #[inline(always)]
     fn is_reading(&self) -> bool {
-        self.rc.load(Acquire) > 0
+        *self.rc.lock().unwrap() > 0
     }
     
     /// Acquires a read-lock. Multiple read-locks may be given at a time.
@@ -195,7 +195,7 @@ impl RwSemaphore {
             }
         };
 
-        self.poll(self.rc.load(Acquire));
+        self.poll();
 
         if let Err(_) = not.notified() {
             for ac in self.al.lock().unwrap().iter() {
@@ -243,7 +243,7 @@ impl RwSemaphore {
             }
         };
 
-        self.poll(self.rc.load(Acquire));
+        self.poll();
 
         not.notified().expect("Notify timed out");
 
@@ -298,21 +298,22 @@ impl RwSemaphore {
     /// called to release a read-lock.
     pub(super) fn release_read(&self) {
         if !self.is_closed() {
-            self.poll(self.rc.fetch_sub(1, Release) - 1);
+            *self.rc.lock().unwrap() -= 1;
+            self.poll();
         }
     }
 
     /// called to release a write-lock.
     pub(super) fn release_write(&self) {
         if !self.is_closed() {
-            self.poll(0);
+            self.poll();
         }
     }
 
     #[allow(dead_code)]
     pub(super) fn evict(&self) {
         self.close();
-        while self.rc.load(Acquire) != 0 {
+        while *self.rc.lock().unwrap() != 0 {
             self.or.notified().unwrap();
         }
         self.sc.fetch_not(Release);

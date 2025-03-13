@@ -176,3 +176,6 @@ impl<T> Drop for Worl<T> {
 
 unsafe impl<T: Send> Sync for Worl<T> {}
 unsafe impl<T: Send> Send for Worl<T> {}
+
+unsafe impl<T: Send> Sync for Wom<T> {}
+unsafe impl<T: Send> Send for Wom<T> {}
