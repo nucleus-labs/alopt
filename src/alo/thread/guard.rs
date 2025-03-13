@@ -1,5 +1,4 @@
-
-use super::{Worl, Wom};
+use super::{Wom, Worl};
 
 use std::sync::atomic::Ordering::*;
 
@@ -17,19 +16,19 @@ pub struct WomGuard<'a, T: 'a> {
 
 impl<'a, T: 'a> WorlGuardRead<'a, T> {
     pub(super) fn new(worl: &'a Worl<T>) -> Self {
-        Self{ worl }
+        Self { worl }
     }
 }
 
 impl<'a, T: 'a> WorlGuardWrite<'a, T> {
     pub(super) fn new(worl: &'a Worl<T>) -> Self {
-        Self{ worl }
+        Self { worl }
     }
 }
 
 impl<'a, T: 'a> WomGuard<'a, T> {
     pub(super) fn new(wom: &'a Wom<T>) -> Self {
-        Self{ wom }
+        Self { wom }
     }
 }
 
@@ -75,7 +74,9 @@ impl<'a, T: 'a> std::ops::Deref for WomGuard<'a, T> {
 
     fn deref(&self) -> &Self::Target {
         if self.wom.mtx.fetch_add(1, Release) < 0 {
-            panic!("cannot access an immutable reference of Wom while there is an active mutable reference!");
+            panic!(
+                "cannot access an immutable reference of Wom while there is an active mutable reference!"
+            );
         }
         self.wom.get_ref().unwrap()
     }
@@ -84,10 +85,14 @@ impl<'a, T: 'a> std::ops::Deref for WomGuard<'a, T> {
 impl<'a, T: 'a> std::ops::DerefMut for WomGuard<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         let accesses = self.wom.mtx.fetch_sub(1, Release);
-        if accesses < 0 {
-            panic!("cannot access a mutable reference of Wom more than once at a time!");
-        } else if accesses > 0 {
-            panic!("cannot access a mutable reference of Wom while there are active immutable references!");
+        match accesses.cmp(&0) {
+            std::cmp::Ordering::Less => {
+                panic!("cannot access a mutable reference of Wom more than once at a time!")
+            }
+            std::cmp::Ordering::Greater => panic!(
+                "cannot access a mutable reference of Wom while there are active immutable references!"
+            ),
+            _ => (),
         }
         self.wom.get_ref().unwrap()
     }

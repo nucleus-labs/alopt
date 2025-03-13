@@ -1,5 +1,4 @@
-
-use std::sync::{Condvar, Mutex, Arc};
+use std::sync::{Arc, Condvar, Mutex};
 
 // type NotifyFlagType = u8;
 
@@ -16,11 +15,11 @@ struct NotifyState {
 
 /// A wrapper around [`Condvar`] for [`std::thread`]/atomics that mirrors
 /// [`tokio::sync::Notify`](https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html).
-/// 
+///
 /// Performs handling of a [`Mutex`] for you (which you'd normally need to do yourself
 /// with a [`Condvar`]), but does not contain or transport any data. [`Notify`] is used
 /// only for syncing across parallel threads.
-/// 
+///
 /// Like [tokio's notify](https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html)'s
 /// and unlike [`Condvar`], [`Notify`] will buffer a single call to
 /// [`Notify::notify_one()`], so if there are no active listeners when
@@ -37,7 +36,7 @@ impl NotifyState {
     // fn check_flag(&self, flag: NotifyFlagType) -> bool {
     //     (self.flags & flag) != 0
     // }
-    
+
     // #[inline(always)]
     // fn toggle_flag(&mut self, flag: NotifyFlagType) {
     //     self.flags ^= flag;
@@ -46,22 +45,30 @@ impl NotifyState {
 
 impl Notify {
     pub(super) fn new() -> Arc<Self> {
-        Self{
+        Self {
             // state: Mutex::new(NotifyState{ count: 0, flags: 0, }),
-            state: Mutex::new(NotifyState{ count: 0, pending: 0, }),
+            state: Mutex::new(NotifyState {
+                count: 0,
+                pending: 0,
+            }),
             cov: Condvar::new(),
             timeout: NOTIFY_TIMEOUT_DEFAULT_MILLIS,
-        }.into()
+        }
+        .into()
     }
 
     #[allow(dead_code)]
     pub(super) fn with_timeout(timeout_millis: u32) -> Arc<Self> {
-        Self{
+        Self {
             // state: Mutex::new(NotifyState{ count: 0, flags: 0, }),
-            state: Mutex::new(NotifyState{ count: 0, pending: 0, }),
+            state: Mutex::new(NotifyState {
+                count: 0,
+                pending: 0,
+            }),
             cov: Condvar::new(),
             timeout: timeout_millis,
-        }.into()
+        }
+        .into()
     }
 
     pub(super) fn notified(&self) -> Result<(), ()> {
@@ -76,11 +83,14 @@ impl Notify {
         }
 
         let current = state.count;
-        let (mut state, timeout) = self.cov.wait_timeout_while(
-            state,
-            std::time::Duration::from_millis(self.timeout as u64),
-            |s| s.count == current
-        ).unwrap();
+        let (mut state, timeout) = self
+            .cov
+            .wait_timeout_while(
+                state,
+                std::time::Duration::from_millis(self.timeout as u64),
+                |s| s.count == current,
+            )
+            .unwrap();
 
         if timeout.timed_out() {
             return Err(());
@@ -124,8 +134,8 @@ mod tests {
     fn test_notify_one() {
         use super::*;
         use std::sync::{
-            atomic::{AtomicBool, Ordering},
             Arc, Barrier,
+            atomic::{AtomicBool, Ordering},
         };
         use std::thread;
         use std::time::Duration;
@@ -158,15 +168,18 @@ mod tests {
 
         handle.join().expect("Thread panicked");
         // The flag should now be set.
-        assert!(flag.load(Ordering::SeqCst), "notify_one did not wake the waiting thread");
+        assert!(
+            flag.load(Ordering::SeqCst),
+            "notify_one did not wake the waiting thread"
+        );
     }
 
     #[test]
     fn test_notify_all() {
         use super::*;
         use std::sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc, Barrier,
+            atomic::{AtomicUsize, Ordering},
         };
         use std::thread;
         use std::time::Duration;

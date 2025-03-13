@@ -43,7 +43,7 @@ type AcquireList = Mutex<AllocRingBuffer<Acquire>>;
 /// A semaphore that allows multiple simultaneous readers but only
 /// one active writer. Uses a request buffer so that writers cannot
 /// be starved of access by new readers.
-/// 
+///
 /// Sequential requests of the same type get batched so that they occupy
 /// fewer spaces within the buffer. However, this does mean that
 /// mixed-type acquisition requests can clog the buffer very quickly.
@@ -68,10 +68,10 @@ pub(super) struct RwSemaphore {
 
 impl Acquire {
     fn new(at: AcquireType) -> Self {
-        Self{
+        Self {
             at,
             ac: 1,
-            an: Notify::new().into(),
+            an: Notify::new(),
             _p: [0; ACQUIRE_PADDING_BYTES],
         }
     }
@@ -90,20 +90,21 @@ impl Acquire {
 
 impl RwSemaphore {
     pub(super) fn new() -> Self {
-        Self{
+        Self {
             rc: Mutex::new(0),
             al: Mutex::new(AllocRingBuffer::new(MAX_ACQUIRES)),
-            an: Notify::new().into(),
+            an: Notify::new(),
             sc: AtomicBool::new(false),
             or: Notify::new(),
         }
     }
 
     fn poll_inner(&self, rc: &mut MutexGuard<usize>) -> Option<usize> {
-        if **rc > 0 && **rc < MAX_READS { // there are active read-guards and not the maximum amount
+        if **rc > 0 && **rc < MAX_READS {
+            // there are active read-guards and not the maximum amount
             let mut lock = self.al.lock().unwrap();
             let acquire = lock.front_mut().unwrap();
-            
+
             let permit_count = (MAX_READS - **rc).min(acquire.ac);
             acquire.ac -= permit_count;
             **rc += permit_count;
@@ -111,12 +112,15 @@ impl RwSemaphore {
             for _ in 0..permit_count {
                 acquire.an.notify_one();
             }
-        } else if **rc == 0 { // there are no active read-guards
+        } else if **rc == 0 {
+            // there are no active read-guards
             let mut lock = self.al.lock().unwrap();
-            if let Some(acquire) = lock.front_mut() { // there is an acquisition buffer entry
-                if acquire.ac > 0 { // the buffer entry has remaining requests
+            if let Some(acquire) = lock.front_mut() {
+                // there is an acquisition buffer entry
+                if acquire.ac > 0 {
+                    // the buffer entry has remaining requests
                     acquire.ac -= 1;
-                    
+
                     if acquire.is_read() {
                         **rc += 1;
                         acquire.an.notify_one();
@@ -124,7 +128,8 @@ impl RwSemaphore {
                     } else {
                         acquire.an.notify_one();
                     }
-                } else { // no more acquisition requests in this batch
+                } else {
+                    // no more acquisition requests in this batch
                     let _ = lock.dequeue().unwrap();
                     // println!("popping read/write");
                     self.an.notify_waiters();
@@ -138,7 +143,7 @@ impl RwSemaphore {
     /// additional readers/writers.
     fn poll(&self) {
         let mut rc = self.rc.lock().unwrap();
-        if let Some(_) = self.poll_inner(&mut rc) {
+        if self.poll_inner(&mut rc).is_some() {
             let _ = self.poll_inner(&mut rc);
         }
     }
@@ -160,7 +165,7 @@ impl RwSemaphore {
     fn is_reading(&self) -> bool {
         *self.rc.lock().unwrap() > 0
     }
-    
+
     /// Acquires a read-lock. Multiple read-locks may be given at a time.
     /// Returns true if read-lock was acquired, false otherwise.
     pub(super) fn acquire_read(&self) -> bool {
@@ -175,20 +180,22 @@ impl RwSemaphore {
                 return false;
             }
             let mut lock = lock.unwrap();
-            
+
             let is_full = lock.is_full();
             if let Some(acquire) = lock.back_mut() {
                 if acquire.is_read() && !is_full {
                     acquire.ac += 1;
                     acquire.an.clone()
-                } else if acquire.is_write() { // write
+                } else if acquire.is_write() {
+                    // write
                     // println!("pushing read");
                     lock.push(Acquire::new(AcquireType::Read));
                     lock.back().unwrap().an.clone()
                 } else {
                     return false;
                 }
-            } else { // if can't get back then is empty, which means not full
+            } else {
+                // if can't get back then is empty, which means not full
                 // println!("pushing read");
                 lock.push(Acquire::new(AcquireType::Read));
                 lock.back().unwrap().an.clone()
@@ -197,7 +204,7 @@ impl RwSemaphore {
 
         self.poll();
 
-        if let Err(_) = not.notified() {
+        if not.notified().is_err() {
             for ac in self.al.lock().unwrap().iter() {
                 println!("=============");
                 println!("{ac:?}");
@@ -236,7 +243,8 @@ impl RwSemaphore {
                 } else {
                     return false;
                 }
-            } else { // if can't get back then is empty, which means not full
+            } else {
+                // if can't get back then is empty, which means not full
                 // println!("pushing write");
                 lock.push(Acquire::new(AcquireType::Write));
                 lock.back().unwrap().an.clone()
@@ -251,13 +259,13 @@ impl RwSemaphore {
     }
 
     /// Acquires a read-lock. Multiple read-locks may be given at a time.
-    /// 
+    ///
     /// Sequential requests of the same type get batched so that they occupy
     /// fewer spaces within the buffer. However, this does mean that
     /// mixed-type acquisition requests can clog the buffer very quickly.
     /// When this happens, acquiring a lock is not possible until a batch has
     /// been completed.
-    /// 
+    ///
     /// Upon batch completion, a message is sent out to callers
     /// of [`Self::acquire_read_wait`] so they may attempt to acquire a space in
     /// the buffer. If they fail again, they just wait for another notification to
@@ -274,13 +282,13 @@ impl RwSemaphore {
 
     /// Acquires a write-lock. Only one write-lock may be active at a time,
     /// and not while *any* read-locks are held.
-    /// 
+    ///
     /// Sequential requests of the same type get batched so that they occupy
     /// fewer spaces within the buffer. However, this does mean that
     /// mixed-type acquisition requests can clog the buffer very quickly.
     /// When this happens, acquiring a lock is not possible until a batch has
     /// been completed.
-    /// 
+    ///
     /// Upon batch completion, a message is sent out to callers
     /// of [`Self::acquire_write_wait`] so they may attempt to acquire a space in
     /// the buffer. If they fail again, they just wait for another notification to

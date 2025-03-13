@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::thread;
 
-use alopt::alo::thread::{Worl, Wom};
+use alopt::alo::thread::{Wom, Worl};
 
 #[test]
 fn test_worl_sync() {

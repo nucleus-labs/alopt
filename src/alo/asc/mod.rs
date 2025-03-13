@@ -2,11 +2,11 @@ mod semaphore;
 
 pub mod guard;
 
-use std::sync::atomic::Ordering::*;
 use std::cell::UnsafeCell;
+use std::sync::atomic::Ordering::*;
 
-use semaphore::{RwSemaphore, AcquireResult, AcquireError};
-use guard::{WorlGuardWrite, WorlGuardRead, WomGuard};
+use guard::{WomGuard, WorlGuardRead, WorlGuardWrite};
+use semaphore::{AcquireError, AcquireResult, RwSemaphore};
 
 type AtomicCounter = std::sync::atomic::AtomicI16;
 
@@ -25,7 +25,7 @@ pub struct Wom<T> {
 impl<T> Worl<T> {
     /// Create a new populated instance
     pub fn new(data: T) -> Self {
-        Self{
+        Self {
             sem: RwSemaphore::new(),
             data: Some(UnsafeCell::new(data)),
         }
@@ -33,14 +33,14 @@ impl<T> Worl<T> {
 
     /// Create a new empty instance
     pub fn empty() -> Self {
-        Self{
+        Self {
             sem: RwSemaphore::new(),
             data: None,
         }
     }
 
     /// Attempt to acquire a read-guard that automatically releases
-    /// its lock upon being dropped. 
+    /// its lock upon being dropped.
     pub async fn read<'a>(&'a mut self) -> AcquireResult<WorlGuardRead<'a, T>> {
         if !self.sem.acquire_read().await {
             return Err(AcquireError::Unavailable);
@@ -99,11 +99,11 @@ impl<T> Worl<T> {
         let acquired = self.sem.acquire_write_wait();
         #[cfg(feature = "tokio")]
         let acquired = acquired.await;
-        
+
         if !acquired {
             return Err(AcquireError::Closed);
         }
-        
+
         self.data = Some(UnsafeCell::new(data));
         self.sem.release_write();
         Ok(())
@@ -113,7 +113,7 @@ impl<T> Worl<T> {
         let acquired = self.sem.acquire_write_wait();
         #[cfg(feature = "tokio")]
         let acquired = acquired.await;
-        
+
         if !acquired {
             return Err(AcquireError::Closed);
         }
@@ -127,7 +127,7 @@ impl<T> Worl<T> {
 impl<T> Wom<T> {
     /// Create a new populated instance
     pub fn new(data: T) -> Self {
-        Self{
+        Self {
             mtx: AtomicCounter::new(0),
             data: Some(UnsafeCell::new(data)),
         }
@@ -135,7 +135,7 @@ impl<T> Wom<T> {
 
     /// Create a new empty instance
     pub fn empty() -> Self {
-        Self{
+        Self {
             mtx: AtomicCounter::new(0),
             data: None,
         }

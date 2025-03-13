@@ -5,11 +5,11 @@ pub mod guard;
 // #[cfg(feature = "tracing")]
 // use tracing::{Level, span};
 
-use std::sync::atomic::Ordering::*;
 use std::cell::UnsafeCell;
+use std::sync::atomic::Ordering::*;
 
-use semaphore::{RwSemaphore, AcquireResult, AcquireError};
-use guard::{WorlGuardWrite, WorlGuardRead, WomGuard};
+use guard::{WomGuard, WorlGuardRead, WorlGuardWrite};
+use semaphore::{AcquireError, AcquireResult, RwSemaphore};
 
 type AtomicCounter = std::sync::atomic::AtomicI16;
 
@@ -28,7 +28,7 @@ pub struct Wom<T> {
 impl<T> Worl<T> {
     /// Create a new populated instance
     pub fn new(data: T) -> Self {
-        Self{
+        Self {
             sem: RwSemaphore::new(),
             data: UnsafeCell::new(Some(data)),
         }
@@ -36,7 +36,7 @@ impl<T> Worl<T> {
 
     /// Create a new empty instance
     pub fn empty() -> Self {
-        Self{
+        Self {
             sem: RwSemaphore::new(),
             data: UnsafeCell::new(None),
         }
@@ -48,12 +48,12 @@ impl<T> Worl<T> {
     }
 
     /// Attempt to acquire a read-guard that automatically releases
-    /// its lock upon being dropped. 
-    pub fn read<'a>(&'a self) -> AcquireResult<WorlGuardRead<'a, T>> {
+    /// its lock upon being dropped.
+    pub fn read(&self) -> AcquireResult<WorlGuardRead<'_, T>> {
         if !self.sem.acquire_read() {
             return Err(AcquireError::ReadUnavailable);
         }
-        
+
         if !self.has_contents() {
             self.sem.release_read();
             Err(AcquireError::ValueNone)
@@ -62,7 +62,7 @@ impl<T> Worl<T> {
         }
     }
 
-    pub fn write<'a>(&'a self) -> AcquireResult<WorlGuardWrite<'a, T>> {
+    pub fn write(&self) -> AcquireResult<WorlGuardWrite<'_, T>> {
         if !self.sem.acquire_read() {
             return Err(AcquireError::ReadUnavailable);
         }
@@ -78,7 +78,7 @@ impl<T> Worl<T> {
         }
     }
 
-    pub fn read_late<'a>(&'a self) -> AcquireResult<WorlGuardRead<'a, T>> {
+    pub fn read_late(&self) -> AcquireResult<WorlGuardRead<'_, T>> {
         if !self.sem.acquire_read_wait() {
             return Err(AcquireError::Closed);
         }
@@ -91,7 +91,7 @@ impl<T> Worl<T> {
         }
     }
 
-    pub fn write_late<'a>(&'a self) -> AcquireResult<WorlGuardWrite<'a, T>> {
+    pub fn write_late(&self) -> AcquireResult<WorlGuardWrite<'_, T>> {
         if !self.sem.acquire_read_wait() {
             return Err(AcquireError::Closed);
         }
@@ -111,8 +111,10 @@ impl<T> Worl<T> {
         if !self.sem.acquire_write_wait() {
             return Err(AcquireError::Closed);
         }
-        
-        unsafe { *self.data.get() = Some(data); }
+
+        unsafe {
+            *self.data.get() = Some(data);
+        }
         self.sem.release_write();
         Ok(())
     }
@@ -122,7 +124,9 @@ impl<T> Worl<T> {
             return Err(AcquireError::Closed);
         }
 
-        unsafe { *self.data.get() = None; }
+        unsafe {
+            *self.data.get() = None;
+        }
         self.sem.release_write();
         Ok(())
     }
@@ -131,7 +135,7 @@ impl<T> Worl<T> {
 impl<'a, T> Wom<T> {
     /// Create a new populated instance
     pub fn new(data: T) -> Self {
-        Self{
+        Self {
             mtx: AtomicCounter::new(0),
             data: UnsafeCell::new(Some(data)),
         }
@@ -139,7 +143,7 @@ impl<'a, T> Wom<T> {
 
     /// Create a new empty instance
     pub fn empty() -> Self {
-        Self{
+        Self {
             mtx: AtomicCounter::new(0),
             data: UnsafeCell::new(None),
         }
