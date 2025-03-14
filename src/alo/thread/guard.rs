@@ -53,7 +53,7 @@ impl<'a, T: 'a> WomGuard<'a, T> {
         Self { wom }
     }
 
-    pub fn clear(&self) {
+    pub fn clear(self) {
         unsafe {
             *self.wom.data.get() = None;
         }
