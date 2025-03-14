@@ -261,9 +261,6 @@ impl<'a, T> Wom<T> {
         if self.locked.fetch_not(AcqRel) {
             self.locked.fetch_not(Release);
             Err(AcquireError::WriteUnavailable)
-        } else if self.data_as_mut().is_none() {
-            self.locked.fetch_not(Release);
-            Err(AcquireError::ValueNone)
         } else {
             unsafe {
                 *self.data.get() = Some(data);

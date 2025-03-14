@@ -128,19 +128,18 @@ fn test_wom_sync() {
     {
         let guard = wom.get_mut().unwrap();
         *guard = 15;
-        *wom.get_mut().unwrap() = 17;
-        assert_eq!(*guard, 17);
+        assert_eq!(*guard, 15);
     }
-    assert_eq!(*wom.get_mut().unwrap(), 17);
+    assert_eq!(*wom.get_mut().unwrap(), 15);
 
     {
         let guard = wom.lock().unwrap();
-        assert_eq!(*guard, 17);
+        assert_eq!(*guard, 15);
     }
 
     {
         let mut guard = wom.lock().unwrap();
-        *guard += 3;
+        *guard += 5;
     }
     assert_eq!(*wom.lock().unwrap(), 20);
 
@@ -149,6 +148,23 @@ fn test_wom_sync() {
         assert!(wom.lock().is_err());
         assert_eq!(*guard, 20);
     }
+
+    {
+        let guard = wom.set(54).unwrap();
+        assert_eq!(*guard, 54);
+        guard.clear();
+    }
+    assert!(wom.lock().is_err());
+
+    {
+        let guard = wom.set(63).unwrap();
+        let mut val = 230;
+        guard.swap(&mut val);
+        assert_eq!(val, 63);
+        assert_eq!(*guard, 230);
+        guard.set(125);
+    }
+    assert_eq!(*wom.lock().unwrap(), 125);
 }
 
 #[test]
