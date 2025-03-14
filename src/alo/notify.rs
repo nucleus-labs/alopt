@@ -1,4 +1,4 @@
-use std::sync::{Condvar, Mutex, Arc};
+use std::sync::{Arc, Condvar, Mutex};
 
 type NotifyFlagType = u8;
 
@@ -40,7 +40,8 @@ impl NotifyState {
 
     #[inline(always)]
     fn set_released(&mut self, released: bool) {
-        self.flags = (self.flags & !(1 << NOTIFY_FLAG_RELEASED)) | ((released as u8) << NOTIFY_FLAG_RELEASED);
+        self.flags = (self.flags & !(1 << NOTIFY_FLAG_RELEASED))
+            | ((released as u8) << NOTIFY_FLAG_RELEASED);
     }
 }
 
@@ -57,7 +58,7 @@ impl Notify {
         }
         .into()
     }
-    
+
     pub(super) fn with_timeout(timeout_millis: u16) -> Arc<Self> {
         Self {
             state: Mutex::new(NotifyState {
@@ -70,7 +71,7 @@ impl Notify {
         }
         .into()
     }
-    
+
     pub(super) fn set_timeout(&self, timeout_millis: u16) {
         self.state.lock().unwrap().timeout = timeout_millis;
     }
@@ -124,7 +125,7 @@ impl Notify {
         for _ in 0..count {
             self.cov.notify_one();
         }
-    } 
+    }
 
     pub(super) fn notify_waiters(&self) {
         let mut state = self.state.lock().unwrap();
@@ -149,8 +150,8 @@ mod tests {
     fn notify() {
         use super::*;
 
-        use std::time::Duration;
         use std::thread;
+        use std::time::Duration;
 
         // ===== SINGLE BASIC NOTIFY =====
 
@@ -164,7 +165,7 @@ mod tests {
         thread::sleep(Duration::from_millis(100));
         notify.notify_one();
         thandle.join().unwrap();
-        
+
         // ===== SINGLE BUFFERED NOTIFY =====
 
         let notify = Notify::with_timeout(u16::MAX);
@@ -177,7 +178,7 @@ mod tests {
 
         notify.notify_one();
         thandle.join().unwrap();
-        
+
         // ===== 2-WAY NOTIFY SYNC =====
 
         let notify_send = Notify::with_timeout(u16::MAX);
@@ -194,7 +195,7 @@ mod tests {
         notify_send.notify_one();
 
         thandle.join().unwrap();
-        
+
         // ===== NOTIFY TIMEOUT =====
 
         let notify_send = Notify::with_timeout(10);
@@ -206,13 +207,13 @@ mod tests {
             notify_receive_remote.notify_one();
             assert!(notify_send_remote.notified().is_err());
         });
-        
+
         notify_receive.notified().unwrap();
         thread::sleep(Duration::from_millis(100));
         notify_send.notify_one();
 
         thandle.join().unwrap();
-        
+
         // ===== NOTIFY COUNT VERIFICATION =====
 
         let notify = Notify::with_timeout(500);
@@ -229,12 +230,13 @@ mod tests {
 
         notify.notify_waiters();
 
-        let count = handles.into_iter()
+        let count = handles
+            .into_iter()
             .map(|handle| handle.join())
             .filter(|handle| handle.is_ok())
             .count();
         assert_eq!(count, 200);
-        
+
         // ===== NOTIFY COUNT VERIFICATION =====
 
         let notify = Notify::with_timeout(200);
@@ -242,16 +244,15 @@ mod tests {
         let mut handles = Vec::new();
         for _ in 0..200 {
             let notify_remote = notify.clone();
-            handles.push(thread::spawn(move || {
-                notify_remote.notified().is_ok()
-            }));
+            handles.push(thread::spawn(move || notify_remote.notified().is_ok()));
         }
 
         notify.notify_many(79);
 
         thread::sleep(Duration::from_millis(200));
 
-        let count = handles.into_iter()
+        let count = handles
+            .into_iter()
             .map(|handle| handle.join())
             .filter(|handle| handle.as_ref().is_ok_and(|h| *h))
             .count();

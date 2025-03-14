@@ -1,7 +1,7 @@
 use ringbuffer::{AllocRingBuffer, RingBuffer};
 
 use std::sync::atomic::{AtomicBool, Ordering::*};
-use std::sync::{Mutex, Arc};
+use std::sync::{Arc, Mutex};
 
 use crate::alo::notify::{NOTIFY_TIMEOUT_DEFAULT_MILLIS, Notify};
 
@@ -105,7 +105,7 @@ impl RwSemaphore {
             an: Notify::new(),
             sc: AtomicBool::new(false),
             or: Notify::new(),
-            to: Mutex::new(NOTIFY_TIMEOUT_DEFAULT_MILLIS as u16),
+            to: Mutex::new(NOTIFY_TIMEOUT_DEFAULT_MILLIS),
         }
     }
 
@@ -113,7 +113,7 @@ impl RwSemaphore {
         *self.to.lock().unwrap() = timeout_millis;
         self.an.set_timeout(timeout_millis);
         self.or.set_timeout(timeout_millis);
-        
+
         let mut al = self.al.lock().unwrap();
         let al_len = al.len();
         for ac in al.iter_mut() {
@@ -163,7 +163,7 @@ impl RwSemaphore {
         self.sc.load(Acquire)
     }
 
-    /// If a notification times out, it means there was 
+    /// If a notification times out, it means there was
     fn dequeue(&self, notify: Arc<Notify>) {
         let mut buffer = self.al.lock().unwrap();
         for acquire in buffer.iter_mut() {
@@ -178,7 +178,7 @@ impl RwSemaphore {
     }
 
     /// Acquires a read-lock. Multiple read-locks may be given at a time.
-    /// 
+    ///
     /// **Guaranteed not to starve.**
     pub(super) fn acquire_read(&self) -> AcquireResult {
         if self.is_closed() {
@@ -228,7 +228,7 @@ impl RwSemaphore {
 
     /// Acquires a write-lock. Only one write-lock may be active at a time,
     /// and not while *any* read-locks are held.
-    /// 
+    ///
     /// **Guaranteed not to starve.**
     pub(super) fn acquire_write(&self) -> AcquireResult {
         if self.is_closed() {
@@ -289,14 +289,14 @@ impl RwSemaphore {
     /// space in the buffer. If they fail again, they just wait for another
     /// notification to try again, unless the failure isn't a result of the buffer
     /// being full.
-    /// 
+    ///
     /// **There are NO guarantees that this request doesn't get starved!**
     pub(super) fn acquire_read_unscheduled(&self) -> AcquireResult {
         let mut request = self.acquire_read();
         while let Err(AcquireError::ReadUnavailable) = request {
             self.an.notified().unwrap();
             request = self.acquire_read();
-        } 
+        }
         request
     }
 
@@ -314,7 +314,7 @@ impl RwSemaphore {
     /// space in the buffer. If they fail again, they just wait for another
     /// notification to try again, unless the failure isn't a result of the buffer
     /// being full.
-    /// 
+    ///
     /// **There are NO guarantees that this request doesn't get starved!**
     pub(super) fn acquire_write_unscheduled(&self) -> AcquireResult {
         let mut request = self.acquire_write();

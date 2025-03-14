@@ -1,4 +1,4 @@
-use super::{Worl, Wom};
+use super::{Wom, Worl};
 
 use std::sync::atomic::Ordering::*;
 
@@ -26,20 +26,24 @@ impl<'a, T: 'a> WorlGuardWrite<'a, T> {
     }
 
     pub fn clear(self) {
-        unsafe { *self.worl.data.get() = None; }
+        unsafe {
+            *self.worl.data.get() = None;
+        }
     }
 
     pub fn set(&self, data: T) {
-        unsafe { *self.worl.data.get() = Some(data); }
+        unsafe {
+            *self.worl.data.get() = Some(data);
+        }
     }
 
     pub fn swap(&self, data: &mut T) -> bool {
         let current = unsafe { &mut *self.worl.data.get() }.as_mut();
         if let Some(cur) = current {
             std::mem::swap(data, cur);
-            return true;
+            true
         } else {
-            return false;
+            false
         }
     }
 }
@@ -50,20 +54,24 @@ impl<'a, T: 'a> WomGuard<'a, T> {
     }
 
     pub fn clear(&self) {
-        unsafe { *self.wom.data.get() = None; }
+        unsafe {
+            *self.wom.data.get() = None;
+        }
     }
 
     pub fn set(&self, data: T) {
-        unsafe { *self.wom.data.get() = Some(data); }
+        unsafe {
+            *self.wom.data.get() = Some(data);
+        }
     }
 
     pub fn swap(&self, data: &mut T) -> bool {
         let current = self.wom.data_as_mut();
         if let Some(cur) = current {
             std::mem::swap(data, cur);
-            return true;
+            true
         } else {
-            return false;
+            false
         }
     }
 }
