@@ -1,6 +1,6 @@
 [package]
 name = "alopt"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 description = "a Rust crate providing efficient synchronization primitives that integrate Option into their design."
 authors = ["Maxine Alexander <Max.Alexander3721@gmail.com>"]

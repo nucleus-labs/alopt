@@ -5,7 +5,7 @@ use alopt::alo::thread::{Wom, Worl};
 
 #[test]
 fn test_worl_sync() {
-    let worl = Worl::<i8>::new(0);
+    let worl = Worl::<i8>::new(0).set_timeout(500);
 
     assert_eq!(*worl.read().unwrap(), 0);
 
@@ -15,14 +15,36 @@ fn test_worl_sync() {
     worl.clear().unwrap();
     assert!(worl.read().is_err());
 
-    worl.set(67).unwrap();
+    assert_eq!(*worl.set(67).unwrap(), 67);
     assert_eq!(*worl.read().unwrap(), 67);
+
+    worl.write().unwrap().clear();
+    assert!(worl.read().is_err());
+
+    worl.set(-1).unwrap();
+    assert_eq!(*worl.read().unwrap(), -1);
+    worl.write().unwrap().set(-7);
+    assert_eq!(*worl.read().unwrap(), -7);
+
+    {
+        let worl_guard = worl.read().unwrap();
+        worl.read().unwrap();
+        assert_eq!(*worl_guard, -7);
+    }
 
     {
         let worl_guard = worl.read().unwrap();
         assert!(worl.write().is_err());
-        assert_eq!(*worl_guard, 67);
+        assert_eq!(*worl_guard, -7);
     }
+
+    {
+        let mut worl_guard = worl.write().unwrap();
+        assert!(worl.read().is_err());
+        assert_eq!(*worl_guard, -7);
+        *worl_guard = 42;
+    }
+    assert_eq!(*worl.read().unwrap(), 42);
 
     {
         let mut worl_guard = worl.write().unwrap();
@@ -36,27 +58,19 @@ fn test_worl_sync() {
 fn test_worl_threaded() {
     use std::time::Duration;
 
-    let worl = Arc::new(Worl::<i8>::new(0));
+    let worl = Arc::new(Worl::<i8>::new(0).set_timeout(u16::MAX));
 
     let mut reader_handles = Vec::new();
     for _ in 0..5000 {
         let worl_reader = worl.clone();
         reader_handles.push(thread::spawn(move || {
             thread::sleep(Duration::from_millis(500));
-            match worl_reader.read() {
-                Ok(guard) => *guard,
-                Err(_) => -1,
-            }
+            *worl_reader.read().unwrap()
         }));
     }
 
-    let worl_writer = worl.clone();
-    let writer_handle = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(30));
-        let mut guard = worl_writer.write().unwrap();
-        *guard += 10;
-    });
-    writer_handle.join().unwrap();
+    thread::sleep(Duration::from_millis(30));
+    *worl.write().unwrap() += 10;
 
     for handle in reader_handles {
         let value = handle.join().unwrap();
@@ -65,7 +79,7 @@ fn test_worl_threaded() {
 
     let worl_clear = worl.clone();
     let clear_handle = thread::spawn(move || {
-        worl_clear.clear().unwrap();
+        worl_clear.write().unwrap().clear();
     });
     clear_handle.join().unwrap();
 
@@ -73,32 +87,68 @@ fn test_worl_threaded() {
 
     let worl_set = worl.clone();
     let set_handle = thread::spawn(move || {
-        worl_set.set(42).unwrap();
+        worl_set.set(91).unwrap();
     });
     set_handle.join().unwrap();
 
     let value = *worl.read().unwrap();
-    assert_eq!(value, 42);
+    assert_eq!(value, 91);
+
+    let worl_clear = worl.clone();
+    let clear_handle = thread::spawn(move || {
+        worl_clear.write().unwrap().clear();
+    });
+    clear_handle.join().unwrap();
+
+    assert!(worl.read().is_err());
+
+    let worl_set = worl.clone();
+    let set_handle = thread::spawn(move || {
+        worl_set.set(91).unwrap();
+    });
+    set_handle.join().unwrap();
+
+    let value = *worl.read().unwrap();
+    assert_eq!(value, 91);
 }
 
 #[test]
 fn test_wom_sync() {
+    let empty_wom = Wom::<i32>::empty();
+    assert!(empty_wom.get_mut().is_err());
+    assert!(empty_wom.lock().is_err());
+
     let wom = Wom::new(10);
 
     {
-        let v = wom.get_mut().unwrap();
-        assert_eq!(*v, 10);
+        let guard = wom.get_mut().unwrap();
+        assert_eq!(*guard, 10);
+    }
+
+    {
+        let guard = wom.get_mut().unwrap();
+        *guard = 15;
+        *wom.get_mut().unwrap() = 17;
+        assert_eq!(*guard, 17);
+    }
+    assert_eq!(*wom.get_mut().unwrap(), 17);
+
+    {
+        let guard = wom.lock().unwrap();
+        assert_eq!(*guard, 17);
     }
 
     {
         let mut guard = wom.lock().unwrap();
-        *guard += 5;
+        *guard += 3;
     }
-    assert_eq!(*wom.get_mut().unwrap(), 15);
+    assert_eq!(*wom.lock().unwrap(), 20);
 
-    let empty_wom = Wom::<i32>::empty();
-    assert!(empty_wom.get_mut().is_err());
-    assert!(empty_wom.lock().is_err());
+    {
+        let guard = wom.lock().unwrap();
+        assert!(wom.lock().is_err());
+        assert_eq!(*guard, 20);
+    }
 }
 
 #[test]

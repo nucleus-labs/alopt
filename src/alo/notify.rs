@@ -1,16 +1,16 @@
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Condvar, Mutex, Arc};
 
-// type NotifyFlagType = u8;
+type NotifyFlagType = u8;
 
-// const NOTIFY_FLAG_BUFFERED: NotifyFlagType = 1 << (NotifyFlagType::BITS - 1);
-// const NOTIFY_FLAG_LEAVE_BUFFERED: NotifyFlagType = 1 << (NotifyFlagType::BITS - 2);
+const NOTIFY_FLAG_RELEASED: u32 = NotifyFlagType::BITS - 1;
 
-const NOTIFY_TIMEOUT_DEFAULT_MILLIS: u32 = 2000;
+pub const NOTIFY_TIMEOUT_DEFAULT_MILLIS: u16 = 2000;
 
 struct NotifyState {
-    count: u16,
-    // flags: NotifyFlagType,
-    pending: u16,
+    count: u8,
+    pending: u8,
+    flags: NotifyFlagType,
+    timeout: u16,
 }
 
 /// A wrapper around [`Condvar`] for [`std::thread`]/atomics that mirrors
@@ -20,75 +20,77 @@ struct NotifyState {
 /// with a [`Condvar`]), but does not contain or transport any data. [`Notify`] is used
 /// only for syncing across parallel threads.
 ///
-/// Like [tokio's notify](https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html)'s
-/// and unlike [`Condvar`], [`Notify`] will buffer a single call to
-/// [`Notify::notify_one()`], so if there are no active listeners when
-/// [`Notify::notify_one()`] is called, the next call to [`Notify::notified()`] will
-/// immediately return (after the mutex is acquired, without waiting on the [`Condvar`]).
+/// While [tokio's notify](https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html)
+/// will allow you to buffer a single notify at a time, [`alopt`](crate)'s [`Notify`]
+/// will buffer up to 255 notifies at a time. A notification is buffered if there are
+/// no active listeners when [`Notify::notify_one()`] is called, or the surplus of the
+/// count provided to [`Notify::notify_many()`] (if there are 3 listeners and
+/// `notify_many()` is called with 5, then 2 get buffered). [`Notify::notify_waiters()`]
+/// will clear the buffer.
 pub(super) struct Notify {
     state: Mutex<NotifyState>,
     cov: Condvar,
-    timeout: u32,
 }
 
 impl NotifyState {
-    // #[inline(always)]
-    // fn check_flag(&self, flag: NotifyFlagType) -> bool {
-    //     (self.flags & flag) != 0
-    // }
+    #[inline(always)]
+    fn get_released(&self) -> bool {
+        self.flags & (1 << NOTIFY_FLAG_RELEASED) > 0
+    }
 
-    // #[inline(always)]
-    // fn toggle_flag(&mut self, flag: NotifyFlagType) {
-    //     self.flags ^= flag;
-    // }
+    #[inline(always)]
+    fn set_released(&mut self, released: bool) {
+        self.flags = (self.flags & !(1 << NOTIFY_FLAG_RELEASED)) | ((released as u8) << NOTIFY_FLAG_RELEASED);
+    }
 }
 
 impl Notify {
     pub(super) fn new() -> Arc<Self> {
         Self {
-            // state: Mutex::new(NotifyState{ count: 0, flags: 0, }),
             state: Mutex::new(NotifyState {
                 count: 0,
                 pending: 0,
+                flags: 0,
+                timeout: NOTIFY_TIMEOUT_DEFAULT_MILLIS,
             }),
             cov: Condvar::new(),
-            timeout: NOTIFY_TIMEOUT_DEFAULT_MILLIS,
         }
         .into()
     }
-
-    #[allow(dead_code)]
-    pub(super) fn with_timeout(timeout_millis: u32) -> Arc<Self> {
+    
+    pub(super) fn with_timeout(timeout_millis: u16) -> Arc<Self> {
         Self {
-            // state: Mutex::new(NotifyState{ count: 0, flags: 0, }),
             state: Mutex::new(NotifyState {
                 count: 0,
                 pending: 0,
+                flags: 0,
+                timeout: timeout_millis,
             }),
             cov: Condvar::new(),
-            timeout: timeout_millis,
         }
         .into()
+    }
+    
+    pub(super) fn set_timeout(&self, timeout_millis: u16) {
+        self.state.lock().unwrap().timeout = timeout_millis;
     }
 
     pub(super) fn notified(&self) -> Result<(), ()> {
         let mut state = self.state.lock().unwrap();
-        // if state.check_flag(NOTIFY_FLAG_BUFFERED) {
-        //     state.toggle_flag(NOTIFY_FLAG_BUFFERED);
-        //     return Ok(());
-        // }
+
         if state.pending > 0 {
             state.pending -= 1;
             return Ok(());
         }
 
         let current = state.count;
+        let timeout = state.timeout;
         let (mut state, timeout) = self
             .cov
             .wait_timeout_while(
                 state,
-                std::time::Duration::from_millis(self.timeout as u64),
-                |s| s.count == current,
+                std::time::Duration::from_millis(timeout as u64),
+                |s| s.count == current || ((s.pending == 0) ^ s.get_released()),
             )
             .unwrap();
 
@@ -96,29 +98,39 @@ impl Notify {
             return Err(());
         }
 
-        // if state.check_flag(NOTIFY_FLAG_BUFFERED) && !state.check_flag(NOTIFY_FLAG_LEAVE_BUFFERED) {
-        //     state.toggle_flag(NOTIFY_FLAG_BUFFERED);
-        // }
         if state.pending > 0 {
             state.pending -= 1;
         }
-
         Ok(())
     }
 
     pub(super) fn notify_one(&self) {
         let mut state = self.state.lock().unwrap();
-        state.count += 1;
-        state.pending = state.pending.saturating_add(1);
-        // state.toggle_flag(NOTIFY_FLAG_BUFFERED);
+        if state.get_released() {
+            state.set_released(false);
+        }
+        state.count = state.count.wrapping_add(1);
+        state.pending += 1;
         self.cov.notify_one();
     }
 
+    pub(super) fn notify_many(&self, count: u8) {
+        let mut state = self.state.lock().unwrap();
+        if state.get_released() {
+            state.set_released(false);
+        }
+        state.count = state.count.wrapping_add(1);
+        state.pending += count;
+        for _ in 0..count {
+            self.cov.notify_one();
+        }
+    } 
+
     pub(super) fn notify_waiters(&self) {
-        let mut generation = self.state.lock().unwrap();
-        generation.count += 1;
-        // generation.toggle_flag(NOTIFY_FLAG_BUFFERED);
-        // generation.toggle_flag(NOTIFY_FLAG_LEAVE_BUFFERED);
+        let mut state = self.state.lock().unwrap();
+        state.count += 1;
+        state.pending = 0;
+        state.set_released(true);
         self.cov.notify_all();
     }
 }
@@ -129,99 +141,120 @@ impl std::fmt::Debug for Notify {
     }
 }
 
+unsafe impl Send for Notify {}
+unsafe impl Sync for Notify {}
+
 mod tests {
     #[test]
-    fn test_notify_one() {
+    fn notify() {
         use super::*;
-        use std::sync::{
-            Arc, Barrier,
-            atomic::{AtomicBool, Ordering},
-        };
-        use std::thread;
+
         use std::time::Duration;
+        use std::thread;
 
-        // This test verifies that a single waiting thread is woken up by notify_one.
-        let notify = Notify::new();
-        let flag = Arc::new(AtomicBool::new(false));
-        // Barrier for two parties: the spawned thread and the main thread.
-        let barrier = Arc::new(Barrier::new(2));
+        // ===== SINGLE BASIC NOTIFY =====
 
-        // Spawn a thread that waits on notify and then sets flag.
-        let notify_clone = notify.clone();
-        let flag_clone = flag.clone();
-        let barrier_clone = barrier.clone();
-        let handle = thread::spawn(move || {
-            // Signal that this thread is about to wait.
-            barrier_clone.wait();
-            // Wait for the notification.
-            notify_clone.notified().expect("notified failed");
-            flag_clone.store(true, Ordering::SeqCst);
+        let notify = Notify::with_timeout(u16::MAX);
+
+        let notify_remote = notify.clone();
+        let thandle = thread::spawn(move || {
+            notify_remote.notified().unwrap();
         });
 
-        // Wait until the spawned thread has started waiting.
-        barrier.wait();
-        // Small sleep to ensure the spawned thread is blocked in notified().
-        thread::sleep(Duration::from_millis(50));
-
-        // Wake one waiter.
+        thread::sleep(Duration::from_millis(100));
         notify.notify_one();
+        thandle.join().unwrap();
+        
+        // ===== SINGLE BUFFERED NOTIFY =====
 
-        handle.join().expect("Thread panicked");
-        // The flag should now be set.
-        assert!(
-            flag.load(Ordering::SeqCst),
-            "notify_one did not wake the waiting thread"
-        );
-    }
+        let notify = Notify::with_timeout(u16::MAX);
 
-    #[test]
-    fn test_notify_all() {
-        use super::*;
-        use std::sync::{
-            Arc, Barrier,
-            atomic::{AtomicUsize, Ordering},
-        };
-        use std::thread;
-        use std::time::Duration;
+        let notify_remote = notify.clone();
+        let thandle = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            notify_remote.notified().unwrap();
+        });
 
-        // This test verifies that notify_waiters wakes all waiting threads.
-        const THREAD_COUNT: usize = 50;
-        let notify = Arc::new(Notify::new());
-        // Use a barrier so that all threads start waiting at roughly the same time.
-        let barrier = Arc::new(Barrier::new(THREAD_COUNT + 1));
-        let counter = Arc::new(AtomicUsize::new(0));
+        notify.notify_one();
+        thandle.join().unwrap();
+        
+        // ===== 2-WAY NOTIFY SYNC =====
 
-        let mut handles = Vec::with_capacity(THREAD_COUNT);
-        for _ in 0..THREAD_COUNT {
-            let notify_clone = notify.clone();
-            let barrier_clone = barrier.clone();
-            let counter_clone = counter.clone();
+        let notify_send = Notify::with_timeout(u16::MAX);
+        let notify_receive = Notify::with_timeout(u16::MAX);
+
+        let notify_send_remote = notify_send.clone();
+        let notify_receive_remote = notify_receive.clone();
+        let thandle = thread::spawn(move || {
+            notify_receive_remote.notify_one();
+            notify_send_remote.notified().unwrap();
+        });
+
+        notify_receive.notified().unwrap();
+        notify_send.notify_one();
+
+        thandle.join().unwrap();
+        
+        // ===== NOTIFY TIMEOUT =====
+
+        let notify_send = Notify::with_timeout(10);
+        let notify_receive = Notify::with_timeout(u16::MAX);
+
+        let notify_send_remote = notify_send.clone();
+        let notify_receive_remote = notify_receive.clone();
+        let thandle = thread::spawn(move || {
+            notify_receive_remote.notify_one();
+            assert!(notify_send_remote.notified().is_err());
+        });
+        
+        notify_receive.notified().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        notify_send.notify_one();
+
+        thandle.join().unwrap();
+        
+        // ===== NOTIFY COUNT VERIFICATION =====
+
+        let notify = Notify::with_timeout(500);
+
+        let mut handles = Vec::new();
+        for _ in 0..200 {
+            let notify_remote = notify.clone();
             handles.push(thread::spawn(move || {
-                // Wait until all threads (and the main thread) are ready.
-                barrier_clone.wait();
-                // Wait for the notification.
-                notify_clone.notified().expect("notified failed");
-                counter_clone.fetch_add(1, Ordering::SeqCst);
+                notify_remote.notified().unwrap();
             }));
         }
 
-        // Ensure all threads have reached the barrier (and are waiting on notified()).
-        barrier.wait();
-        // Optionally, a short sleep can ensure that threads are waiting.
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(200));
 
-        // Wake all waiters.
         notify.notify_waiters();
 
-        for handle in handles {
-            handle.join().expect("Thread panicked");
+        let count = handles.into_iter()
+            .map(|handle| handle.join())
+            .filter(|handle| handle.is_ok())
+            .count();
+        assert_eq!(count, 200);
+        
+        // ===== NOTIFY COUNT VERIFICATION =====
+
+        let notify = Notify::with_timeout(200);
+
+        let mut handles = Vec::new();
+        for _ in 0..200 {
+            let notify_remote = notify.clone();
+            handles.push(thread::spawn(move || {
+                notify_remote.notified().is_ok()
+            }));
         }
 
-        // Confirm that every waiting thread was woken.
-        assert_eq!(
-            counter.load(Ordering::SeqCst),
-            THREAD_COUNT,
-            "not all waiters were notified"
-        );
+        notify.notify_many(79);
+
+        thread::sleep(Duration::from_millis(200));
+
+        let count = handles.into_iter()
+            .map(|handle| handle.join())
+            .filter(|handle| handle.as_ref().is_ok_and(|h| *h))
+            .count();
+        assert_eq!(count, 79);
     }
 }

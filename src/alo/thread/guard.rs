@@ -1,4 +1,4 @@
-use super::{Wom, Worl};
+use super::{Worl, Wom};
 
 use std::sync::atomic::Ordering::*;
 
@@ -24,11 +24,47 @@ impl<'a, T: 'a> WorlGuardWrite<'a, T> {
     pub(super) fn new(worl: &'a Worl<T>) -> Self {
         Self { worl }
     }
+
+    pub fn clear(self) {
+        unsafe { *self.worl.data.get() = None; }
+    }
+
+    pub fn set(&self, data: T) {
+        unsafe { *self.worl.data.get() = Some(data); }
+    }
+
+    pub fn swap(&self, data: &mut T) -> bool {
+        let current = unsafe { &mut *self.worl.data.get() }.as_mut();
+        if let Some(cur) = current {
+            std::mem::swap(data, cur);
+            return true;
+        } else {
+            return false;
+        }
+    }
 }
 
 impl<'a, T: 'a> WomGuard<'a, T> {
     pub(super) fn new(wom: &'a Wom<T>) -> Self {
         Self { wom }
+    }
+
+    pub fn clear(&self) {
+        unsafe { *self.wom.data.get() = None; }
+    }
+
+    pub fn set(&self, data: T) {
+        unsafe { *self.wom.data.get() = Some(data); }
+    }
+
+    pub fn swap(&self, data: &mut T) -> bool {
+        let current = self.wom.data_as_mut();
+        if let Some(cur) = current {
+            std::mem::swap(data, cur);
+            return true;
+        } else {
+            return false;
+        }
     }
 }
 
@@ -73,37 +109,18 @@ impl<'a, T: 'a> std::ops::Deref for WomGuard<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        if self.wom.mtx.fetch_add(1, Release) < 0 {
-            panic!(
-                "cannot access an immutable reference of Wom while there is an active mutable reference!"
-            );
-        }
-        self.wom.get_ref().unwrap()
+        self.wom.data_as_mut().unwrap()
     }
 }
 
 impl<'a, T: 'a> std::ops::DerefMut for WomGuard<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        let accesses = self.wom.mtx.fetch_sub(1, Release);
-        match accesses.cmp(&0) {
-            std::cmp::Ordering::Less => {
-                panic!("cannot access a mutable reference of Wom more than once at a time!")
-            }
-            std::cmp::Ordering::Greater => panic!(
-                "cannot access a mutable reference of Wom while there are active immutable references!"
-            ),
-            _ => (),
-        }
-        self.wom.get_ref().unwrap()
+        self.wom.data_as_mut().unwrap()
     }
 }
 
 impl<'a, T: 'a> Drop for WomGuard<'a, T> {
     fn drop(&mut self) {
-        if self.wom.mtx.load(Acquire) < 0 {
-            self.wom.mtx.fetch_add(1, Release);
-        } else {
-            self.wom.mtx.fetch_sub(1, Release);
-        }
+        self.wom.locked.fetch_not(Release);
     }
 }
