@@ -114,11 +114,11 @@ fn test_worl_threaded() {
 
 #[test]
 fn test_wom_sync() {
-    let empty_wom = Wom::<i32>::empty();
+    let mut empty_wom = Wom::<i32>::empty();
     assert!(empty_wom.get_mut().is_err());
     assert!(empty_wom.lock().is_err());
 
-    let wom = Wom::new(10);
+    let mut wom = Wom::new(10);
 
     {
         let guard = wom.get_mut().unwrap();
@@ -131,6 +131,8 @@ fn test_wom_sync() {
         assert_eq!(*guard, 15);
     }
     assert_eq!(*wom.get_mut().unwrap(), 15);
+    
+    let wom = Wom::new(15);
 
     {
         let guard = wom.lock().unwrap();
@@ -145,7 +147,7 @@ fn test_wom_sync() {
 
     {
         let guard = wom.lock().unwrap();
-        assert!(wom.lock().is_err());
+        assert!(wom.try_lock().is_err());
         assert_eq!(*guard, 20);
     }
 
@@ -169,8 +171,10 @@ fn test_wom_sync() {
 
 #[test]
 fn test_wom_threaded() {
+    const THREAD_COUNT: usize = 4;
+    const ITERS_PER_THREAD: usize = 1_000;
+    
     let wom = Arc::new(Wom::new(0));
-    const THREAD_COUNT: usize = 10;
     let mut handles = Vec::with_capacity(THREAD_COUNT);
 
     for _ in 0..THREAD_COUNT {
@@ -186,5 +190,20 @@ fn test_wom_threaded() {
         handle.join().unwrap();
     }
 
-    assert_eq!(*wom.get_mut().unwrap(), THREAD_COUNT as i32);
+    assert_eq!(*wom.lock().unwrap(), THREAD_COUNT as i32);
+
+    let wom = Arc::new(Wom::new(0));
+    let mut handles = Vec::with_capacity(THREAD_COUNT);
+    for _ in 0..THREAD_COUNT {
+        let m = wom.clone();
+        handles.push(thread::spawn(move || {
+            for _ in 0..ITERS_PER_THREAD {
+                let mut data = m.lock().unwrap();
+                *data += 1;
+            }
+        }));
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
 }

@@ -11,8 +11,36 @@ keywords = ["synchronization", "concurrency", "async", "multithreading", "lock"]
 categories = ["concurrency", "asynchronous", "data-structures"]
 
 [features]
+default = ["tokio"]
 tokio = ["dep:tokio"]
 
 [dependencies]
 ringbuffer = "0.15.0"
-tokio = { version = "1.44.0", features = ["sync"], optional = true }
+tokio = { version = "1.44.0", features = ["sync", "time"], optional = true }
+
+[dev-dependencies]
+criterion = "0.5.1"
+
+[[bench]]
+name = "std_rwlock"
+harness = false
+
+[[bench]]
+name = "std_mutex"
+harness = false
+
+[[bench]]
+name = "thread_worl"
+harness = false
+
+[[bench]]
+name = "thread_wom"
+harness = false
+
+[[bench]]
+name = "async_worl"
+harness = false
+
+[[bench]]
+name = "async_wom"
+harness = false

@@ -2,13 +2,15 @@ mod semaphore;
 
 pub mod guard;
 
-use std::cell::UnsafeCell;
 use std::sync::atomic::Ordering::*;
+use std::cell::UnsafeCell;
+use std::thread;
+use std::hint;
 
 use guard::{WomGuard, WorlGuardRead, WorlGuardWrite};
 use semaphore::{AcquireError, AcquireResult, RwSemaphore};
 
-type AtomicCounter = std::sync::atomic::AtomicBool;
+type AtomicCounter = std::sync::atomic::AtomicU8;
 
 /// Write, Option, Read, Lock ([`Worl`])
 ///
@@ -79,6 +81,8 @@ impl<T> Worl<T> {
         unsafe { &*self.data.get() }.is_some()
     }
 
+    /// Set the timeout duration (in milliseconds) for a
+    /// lock-acquisition request.
     pub fn set_timeout(self, timeout_millis: u16) -> Self {
         self.sem.set_timeout(timeout_millis);
         self
@@ -174,6 +178,9 @@ impl<T> Worl<T> {
         }
     }
 
+    /// Set the internal [`Option<T>`] value to [`None`]. Requires a write-lock,
+    /// but skips the fail-fast read-lock because it doesn't matter what the
+    /// value was before. Returns the acquired read-lock guard.
     pub fn clear(&self) -> AcquireResult {
         self.sem.acquire_write_unscheduled()?;
 
@@ -184,6 +191,9 @@ impl<T> Worl<T> {
         Ok(())
     }
 
+    /// Set the internal [`Option<T>`] value to [`Some()`]. Requires a write-lock,
+    /// but skips the fail-fast read-lock because it doesn't matter what the
+    /// value was before. Returns the acquired read-lock guard.
     pub fn set(&self, data: T) -> AcquireResult<WorlGuardWrite<'_, T>> {
         self.sem.acquire_write_unscheduled()?;
 
@@ -193,23 +203,37 @@ impl<T> Worl<T> {
         Ok(WorlGuardWrite::new(self))
     }
 
+    /// Swaps the data at `data` with the data stored internally. **This is done
+    /// in-place** with [`std::mem::swap()`]. Because it requires that there was
+    /// already data present in the [`Worl`], a fail-fast read-lock is acquired
+    /// to read the value of the internal [`Option<T>`]. Then a write-lock is
+    /// acquired before swapping the data and returning the acquired write-lock.
     pub fn swap(&self, data: &mut T) -> AcquireResult<WorlGuardWrite<'_, T>> {
-        self.sem.acquire_write_unscheduled()?;
+        self.sem.acquire_read_unscheduled()?;
+
         let current = unsafe { &mut *self.data.get() }.as_mut();
         if let Some(cur) = current {
+            self.sem.release_read();
+            self.sem.acquire_write_unscheduled()?;
+
             std::mem::swap(data, cur);
             Ok(WorlGuardWrite::new(self))
         } else {
+            self.sem.release_read();
             Err(AcquireError::ValueNone)
         }
     }
 }
 
 impl<'a, T> Wom<T> {
+    const UNLOCKED: u8 = 0;
+    const LOCKED: u8 = 1;
+    const CONTENDED: u8 = 2;
+
     /// Create a new populated instance
     pub fn new(data: T) -> Self {
         Self {
-            locked: AtomicCounter::new(false),
+            locked: AtomicCounter::new(Self::UNLOCKED),
             data: UnsafeCell::new(Some(data)),
         }
     }
@@ -217,7 +241,7 @@ impl<'a, T> Wom<T> {
     /// Create a new empty instance
     pub fn empty() -> Self {
         Self {
-            locked: AtomicCounter::new(false),
+            locked: AtomicCounter::new(Self::UNLOCKED),
             data: UnsafeCell::new(None),
         }
     }
@@ -226,16 +250,103 @@ impl<'a, T> Wom<T> {
         unsafe { &mut *self.data.get() }.as_mut()
     }
 
-    pub fn get_mut(&'a self) -> AcquireResult<&'a mut T> {
-        self.data_as_mut().ok_or(AcquireError::ValueNone)
+    /// Gets a mutable reference to the contained value, if one exists.
+    /// 
+    /// Because this borrows [`Wom`] mutably, no checking needs to be
+    /// performed. It's statically guaranteed that no locks exist.
+    /// 
+    #[inline]
+    pub fn get_mut(&'a mut self) -> AcquireResult<&'a mut T> {
+        self.data.get_mut().as_mut().ok_or(AcquireError::ValueNone)
+    }
+
+    fn spin(&self) -> u8 {
+        let mut spin = 100;
+        loop {
+            let state = self.locked.load(Relaxed);
+            
+            if state != Self::LOCKED || spin == 0 {
+                return state;
+            }
+
+            hint::spin_loop();
+            spin -= 1;
+        }
+    }
+
+    fn resolve_contention(&self) {
+        let mut state = self.spin();
+
+        if state == Self::UNLOCKED {
+            match self.locked.compare_exchange(Self::UNLOCKED, Self::LOCKED, Acquire, Relaxed) {
+                Ok(_) => return, // Locked!
+                Err(s) => state = s,
+            }
+        }
+
+        loop {
+            if state != Self::CONTENDED && self.locked.swap(Self::CONTENDED, AcqRel) == Self::UNLOCKED {
+                return;
+            }
+
+            unsafe {
+                let lock_addr = (&self.locked).as_ptr();
+                while *lock_addr == state {
+                    // thread::yield_now();
+                    thread::sleep(std::time::Duration::from_nanos(0));
+                }
+            }
+
+            state = self.spin();
+        }
+    }
+
+    fn release(&self) {
+        if self.locked.compare_exchange(Self::LOCKED, Self::UNLOCKED, AcqRel, Relaxed).is_err() {
+            let mut state = self.spin();
+
+            if state == Self::CONTENDED {
+                match self.locked.compare_exchange(Self::CONTENDED, Self::UNLOCKED, AcqRel, Relaxed) {
+                    Ok(_) => return, // Released!
+                    Err(s) => state = s,
+                }
+            }
+
+            loop {
+                if state != Self::CONTENDED && self.locked.swap(Self::CONTENDED, Release) == Self::UNLOCKED {
+                    return;
+                }
+    
+                unsafe {
+                    let lock_addr = (&self.locked).as_ptr();
+                    while *lock_addr == state {
+                        // thread::yield_now();
+                        thread::sleep(std::time::Duration::from_nanos(0));
+                    }
+                }
+    
+                state = self.spin();
+            }
+        }
     }
 
     pub fn lock(&'a self) -> AcquireResult<WomGuard<'a, T>> {
-        if self.locked.fetch_not(AcqRel) {
-            self.locked.fetch_not(Release);
+        if self.locked.compare_exchange(Self::UNLOCKED, Self::LOCKED, Acquire, Relaxed).is_err() {
+            self.resolve_contention();
+        }
+
+        if self.data_as_mut().is_none() {
+            self.release();
+            return Err(AcquireError::ValueNone);
+        } else {
+            Ok(WomGuard::new(self))
+        }
+    }
+
+    pub fn try_lock(&'a self) -> AcquireResult<WomGuard<'a, T>> {
+        if self.locked.compare_exchange(Self::UNLOCKED, Self::LOCKED, Acquire, Relaxed).is_err() {
             Err(AcquireError::WriteUnavailable)
         } else if self.data_as_mut().is_none() {
-            self.locked.fetch_not(Release);
             Err(AcquireError::ValueNone)
         } else {
             Ok(WomGuard::new(self))
@@ -243,44 +354,27 @@ impl<'a, T> Wom<T> {
     }
 
     pub fn clear(&self) -> AcquireResult {
-        if self.locked.fetch_not(AcqRel) {
-            self.locked.fetch_not(Release);
-            Err(AcquireError::WriteUnavailable)
-        } else if self.data_as_mut().is_none() {
-            self.locked.fetch_not(Release);
-            Err(AcquireError::ValueNone)
-        } else {
-            unsafe {
-                *self.data.get() = None;
-            }
-            Ok(())
+        let _ = self.lock()?;
+        unsafe {
+            *self.data.get() = None;
         }
+        Ok(())
     }
 
-    pub fn set(&self, data: T) -> AcquireResult<WomGuard<'_, T>> {
-        if self.locked.fetch_not(AcqRel) {
-            self.locked.fetch_not(Release);
-            Err(AcquireError::WriteUnavailable)
-        } else {
-            unsafe {
-                *self.data.get() = Some(data);
-            }
-            Ok(WomGuard::new(self))
+    pub fn set(&'a self, data: T) -> AcquireResult<WomGuard<'a, T>> {
+        if self.locked.compare_exchange(Self::UNLOCKED, Self::LOCKED, Acquire, Relaxed).is_err() {
+            self.resolve_contention();
         }
+        unsafe {
+            *self.data.get() = Some(data);
+        }
+        Ok(WomGuard::new(self))
     }
 
-    pub fn swap(&self, data: &mut T) -> AcquireResult<WomGuard<'_, T>> {
-        if self.locked.fetch_not(AcqRel) {
-            self.locked.fetch_not(Release);
-            Err(AcquireError::WriteUnavailable)
-        } else if let Some(cur) = self.data_as_mut() {
-            std::mem::swap(data, cur);
-
-            Ok(WomGuard::new(self))
-        } else {
-            self.locked.fetch_not(Release);
-            Err(AcquireError::ValueNone)
-        }
+    pub fn swap(&'a self, data: &mut T) -> AcquireResult<WomGuard<'a, T>> {
+        let lock = self.lock()?;
+        std::mem::swap(data, self.data_as_mut().unwrap());
+        Ok(lock)
     }
 }
 

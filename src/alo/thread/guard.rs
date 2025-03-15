@@ -1,7 +1,5 @@
 use super::{Wom, Worl};
 
-use std::sync::atomic::Ordering::*;
-
 pub struct WorlGuardRead<'a, T: 'a> {
     worl: &'a Worl<T>,
 }
@@ -65,14 +63,8 @@ impl<'a, T: 'a> WomGuard<'a, T> {
         }
     }
 
-    pub fn swap(&self, data: &mut T) -> bool {
-        let current = self.wom.data_as_mut();
-        if let Some(cur) = current {
-            std::mem::swap(data, cur);
-            true
-        } else {
-            false
-        }
+    pub fn swap(&self, data: &mut T) {
+        std::mem::swap(data, self.wom.data_as_mut().unwrap());
     }
 }
 
@@ -129,6 +121,6 @@ impl<'a, T: 'a> std::ops::DerefMut for WomGuard<'a, T> {
 
 impl<'a, T: 'a> Drop for WomGuard<'a, T> {
     fn drop(&mut self) {
-        self.wom.locked.fetch_not(Release);
+        self.wom.release();
     }
 }
