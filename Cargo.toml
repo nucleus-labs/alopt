@@ -11,7 +11,7 @@ keywords = ["synchronization", "concurrency", "async", "multithreading", "lock"]
 categories = ["concurrency", "asynchronous", "data-structures"]
 
 [features]
-default = ["tokio"]
+# default = ["tokio"]
 tokio = ["dep:tokio"]
 
 [dependencies]

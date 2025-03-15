@@ -131,7 +131,7 @@ fn test_wom_sync() {
         assert_eq!(*guard, 15);
     }
     assert_eq!(*wom.get_mut().unwrap(), 15);
-    
+
     let wom = Wom::new(15);
 
     {
@@ -173,7 +173,7 @@ fn test_wom_sync() {
 fn test_wom_threaded() {
     const THREAD_COUNT: usize = 4;
     const ITERS_PER_THREAD: usize = 1_000;
-    
+
     let wom = Arc::new(Wom::new(0));
     let mut handles = Vec::with_capacity(THREAD_COUNT);
 

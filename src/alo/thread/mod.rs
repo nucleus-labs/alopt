@@ -2,10 +2,10 @@ mod semaphore;
 
 pub mod guard;
 
-use std::sync::atomic::Ordering::*;
 use std::cell::UnsafeCell;
-use std::thread;
 use std::hint;
+use std::sync::atomic::Ordering::*;
+use std::thread;
 
 use guard::{WomGuard, WorlGuardRead, WorlGuardWrite};
 use semaphore::{AcquireError, AcquireResult, RwSemaphore};
@@ -251,10 +251,10 @@ impl<'a, T> Wom<T> {
     }
 
     /// Gets a mutable reference to the contained value, if one exists.
-    /// 
+    ///
     /// Because this borrows [`Wom`] mutably, no checking needs to be
     /// performed. It's statically guaranteed that no locks exist.
-    /// 
+    ///
     #[inline]
     pub fn get_mut(&'a mut self) -> AcquireResult<&'a mut T> {
         self.data.get_mut().as_mut().ok_or(AcquireError::ValueNone)
@@ -264,7 +264,7 @@ impl<'a, T> Wom<T> {
         let mut spin = 100;
         loop {
             let state = self.locked.load(Relaxed);
-            
+
             if state != Self::LOCKED || spin == 0 {
                 return state;
             }
@@ -278,22 +278,27 @@ impl<'a, T> Wom<T> {
         let mut state = self.spin();
 
         if state == Self::UNLOCKED {
-            match self.locked.compare_exchange(Self::UNLOCKED, Self::LOCKED, Acquire, Relaxed) {
+            match self
+                .locked
+                .compare_exchange(Self::UNLOCKED, Self::LOCKED, Acquire, Relaxed)
+            {
                 Ok(_) => return, // Locked!
                 Err(s) => state = s,
             }
         }
 
         loop {
-            if state != Self::CONTENDED && self.locked.swap(Self::CONTENDED, AcqRel) == Self::UNLOCKED {
+            if state != Self::CONTENDED
+                && self.locked.swap(Self::CONTENDED, AcqRel) == Self::UNLOCKED
+            {
                 return;
             }
 
             unsafe {
-                let lock_addr = (&self.locked).as_ptr();
+                let lock_addr = self.locked.as_ptr();
+                #[allow(clippy::while_immutable_condition)]
                 while *lock_addr == state {
-                    // thread::yield_now();
-                    thread::sleep(std::time::Duration::from_nanos(0));
+                    thread::yield_now();
                 }
             }
 
@@ -302,49 +307,66 @@ impl<'a, T> Wom<T> {
     }
 
     fn release(&self) {
-        if self.locked.compare_exchange(Self::LOCKED, Self::UNLOCKED, AcqRel, Relaxed).is_err() {
+        if self
+            .locked
+            .compare_exchange(Self::LOCKED, Self::UNLOCKED, AcqRel, Relaxed)
+            .is_err()
+        {
             let mut state = self.spin();
 
             if state == Self::CONTENDED {
-                match self.locked.compare_exchange(Self::CONTENDED, Self::UNLOCKED, AcqRel, Relaxed) {
+                match self
+                    .locked
+                    .compare_exchange(Self::CONTENDED, Self::UNLOCKED, AcqRel, Relaxed)
+                {
                     Ok(_) => return, // Released!
                     Err(s) => state = s,
                 }
             }
 
             loop {
-                if state != Self::CONTENDED && self.locked.swap(Self::CONTENDED, Release) == Self::UNLOCKED {
+                if state != Self::CONTENDED
+                    && self.locked.swap(Self::CONTENDED, Release) == Self::UNLOCKED
+                {
                     return;
                 }
-    
+
                 unsafe {
-                    let lock_addr = (&self.locked).as_ptr();
+                    let lock_addr = self.locked.as_ptr();
+                    #[allow(clippy::while_immutable_condition)]
                     while *lock_addr == state {
-                        // thread::yield_now();
-                        thread::sleep(std::time::Duration::from_nanos(0));
+                        thread::yield_now();
                     }
                 }
-    
+
                 state = self.spin();
             }
         }
     }
 
     pub fn lock(&'a self) -> AcquireResult<WomGuard<'a, T>> {
-        if self.locked.compare_exchange(Self::UNLOCKED, Self::LOCKED, Acquire, Relaxed).is_err() {
+        if self
+            .locked
+            .compare_exchange(Self::UNLOCKED, Self::LOCKED, Acquire, Relaxed)
+            .is_err()
+        {
             self.resolve_contention();
         }
 
         if self.data_as_mut().is_none() {
             self.release();
-            return Err(AcquireError::ValueNone);
+            Err(AcquireError::ValueNone)
         } else {
             Ok(WomGuard::new(self))
         }
     }
 
     pub fn try_lock(&'a self) -> AcquireResult<WomGuard<'a, T>> {
-        if self.locked.compare_exchange(Self::UNLOCKED, Self::LOCKED, Acquire, Relaxed).is_err() {
+        if self
+            .locked
+            .compare_exchange(Self::UNLOCKED, Self::LOCKED, Acquire, Relaxed)
+            .is_err()
+        {
             Err(AcquireError::WriteUnavailable)
         } else if self.data_as_mut().is_none() {
             Err(AcquireError::ValueNone)
@@ -362,7 +384,11 @@ impl<'a, T> Wom<T> {
     }
 
     pub fn set(&'a self, data: T) -> AcquireResult<WomGuard<'a, T>> {
-        if self.locked.compare_exchange(Self::UNLOCKED, Self::LOCKED, Acquire, Relaxed).is_err() {
+        if self
+            .locked
+            .compare_exchange(Self::UNLOCKED, Self::LOCKED, Acquire, Relaxed)
+            .is_err()
+        {
             self.resolve_contention();
         }
         unsafe {

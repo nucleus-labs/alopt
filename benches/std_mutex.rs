@@ -1,12 +1,12 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
-use std::sync::{Mutex, Arc};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 fn std_mutex(c: &mut Criterion) {
     const THREAD_COUNT: usize = 4;
     const ITERS_PER_THREAD: usize = 1_000;
-    
+
     c.bench_function("uncontended_lock", |b| {
         b.iter(|| {
             let mutex = Mutex::<u8>::new(0);
@@ -53,7 +53,7 @@ fn std_mutex(c: &mut Criterion) {
             black_box(&mutex);
         })
     });
-    
+
     c.bench_function("heavy_contention", |b| {
         b.iter(|| {
             let wom = Arc::new(Mutex::<u8>::new(0));

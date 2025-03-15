@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 use std::sync::Arc;
 use std::thread;
@@ -55,7 +55,7 @@ fn thread_wom(c: &mut Criterion) {
             black_box(&wom);
         })
     });
-    
+
     c.bench_function("heavy_contention", |b| {
         b.iter(|| {
             let wom = Arc::new(Wom::<u8>::new(0));
